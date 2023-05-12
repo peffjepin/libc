@@ -67,6 +67,10 @@ struct fs_error {
 struct fs_content fs_read_file_binary(const char* filepath, FilesystemAllocator*, struct fs_error*);
 ```
 
+### Exceptions:
+
+The allocator module does not follow this pattern and instead follows the standard pattern of returning NULL on failure.
+
 ## Tests
 
 Tests should be included at the bottom of the header behind a preprocessor guard and should serve as an example
