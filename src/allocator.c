@@ -2,9 +2,8 @@
 
 #include <string.h>
 
-static const size_t ALLOCATION_HEAD_BLOCK_COUNT =
-    sizeof(struct allocation) / sizeof(AllocatorBlock);
-static const size_t MIN_BLOCKS_REQUIRED_FOR_ALLOCATION = 1 + ALLOCATION_HEAD_BLOCK_COUNT;
+#define ALLOCATION_HEAD_BLOCK_COUNT (sizeof(struct allocation) / sizeof(AllocatorBlock))
+#define MIN_BLOCKS_REQUIRED_FOR_ALLOCATION (1 + ALLOCATION_HEAD_BLOCK_COUNT)
 
 struct allocator default_allocator = {
     .type = ALLOCATOR_DEFAULT,
