@@ -81,7 +81,10 @@ fs_free(void* ptr, FilesystemAllocator* allocator)
             FS_FATAL_ERRORF(fmt, __VA_ARGS__);                                                     \
         }                                                                                          \
         (error)->code = (error_code);                                                              \
-        snprintf((error)->reason, sizeof(error)->reason, fmt, __VA_ARGS__);                        \
+        if (snprintf((error)->reason, sizeof(error)->reason, fmt, __VA_ARGS__) >=                  \
+            (int)sizeof(error)->reason) {                                                          \
+            memcpy((error)->reason + sizeof(error)->reason - 3, "..", 3);                          \
+        }                                                                                          \
     } while (0)
 
 #define FS_SET_ERROR(error, error_code, message)                                                   \
