@@ -2,7 +2,7 @@
 
 CC ?= gcc
 EXTRA_FLAGS ?=
-FLAGS = -Wall -Wextra -Wpedantic -std=c11 $(EXTRA_FLAGS)
+FLAGS = -Wall -Wextra -Wpedantic -std=c11 -fsanitize=address $(EXTRA_FLAGS)
 
 test:
 	mkdir -p build

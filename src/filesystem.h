@@ -275,6 +275,7 @@ main(int argc, char** argv)
         struct fs_content content = fs_path_read_binary(&path, NULL, NULL);
         TEST_ASSERT(content.size == sizeof value && content.data);
         TEST_ASSERT(*(int*)content.data == 123);
+        free(content.data);
 
         // load file that does not exist
         //
@@ -304,6 +305,7 @@ main(int argc, char** argv)
         TEST_ASSERT(content.size == 5);
         TEST_ASSERT(content.data && strcmp(content.data, "hello") == 0);
         TEST_ASSERT(fs_path_is_file(&path));
+        free(content.data);
 
         // load file that does not exist
         //
