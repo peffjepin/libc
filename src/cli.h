@@ -13,13 +13,14 @@
 enum cli_type {
     CLI_STR = 0,
     CLI_INT,
+    CLI_FLOAT,
     CLI_FLAG,
 };
 
 union cli_value {
+    const char* str;
     int64_t     i64;
     double      f64;
-    const char* str;
     bool        present;
 };
 
@@ -64,8 +65,8 @@ struct cli_error {
 
 void cli_parse_args(
     const char*        program_description,
-    struct cli_param** params,
     size_t             params_count,
+    struct cli_param** params,
     int                argc,
     const char**       argv,
     struct cli_error*  error
