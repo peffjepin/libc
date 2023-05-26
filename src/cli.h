@@ -44,12 +44,15 @@ struct cli_validation {
     };
 };
 
+enum cli_flags {
+    CLI_FLAG_OPTION_REQUIRED = 1u << 0,
+};
+
 struct cli_param {
     const char*           name;
-    const char*           short_name;
     enum cli_type         type;
+    uint32_t              flags;
     struct cli_validation validation;
-    bool                  required;
     const char*           description;
     union cli_value       value;
 };

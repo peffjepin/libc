@@ -25,6 +25,22 @@
         CLI_WRITE_ERRORF(error, "%s", message);                                                    \
     } while (0)
 
+static const char*
+cli_type_to_cstr(enum cli_type type)
+{
+    switch (type) {
+        case CLI_STR:
+            return "string";
+        case CLI_INT:
+            return "integer";
+        case CLI_FLOAT:
+            return "floating point";
+        case CLI_FLAG:
+            return "flag";
+    }
+    CLI_ASSERT(0 && "unreachable");
+}
+
 static void
 write_usage_to_error(
     const char*        program_name,
@@ -50,21 +66,12 @@ write_usage_to_error(
 
     for (size_t i = 0; i < params_count; i++) {
         if (params[i]->name[0] != '-') {
-            if (params[i]->short_name) {
-                uprintf(
-                    "\t%s (%s) - %s\n",
-                    params[i]->name,
-                    params[i]->short_name,
-                    (params[i]->description) ? params[i]->description : "no description"
-                );
-            }
-            else {
-                uprintf(
-                    "\t%s - %s\n",
-                    params[i]->name,
-                    (params[i]->description) ? params[i]->description : "no description"
-                );
-            }
+            uprintf(
+                "\t%s - (%s) %s\n",
+                params[i]->name,
+                cli_type_to_cstr(params[i]->type),
+                (params[i]->description) ? params[i]->description : "no description"
+            );
         }
         else {
             options_count += 1;
@@ -76,21 +83,12 @@ write_usage_to_error(
         uprintf("%s:\n", "options");
         for (size_t i = 0; i < params_count; i++) {
             if (params[i]->name[0] == '-') {
-                if (params[i]->short_name) {
-                    uprintf(
-                        "\t%s (%s) - %s\n",
-                        params[i]->name,
-                        params[i]->short_name,
-                        (params[i]->description) ? params[i]->description : "no description"
-                    );
-                }
-                else {
-                    uprintf(
-                        "\t%s - %s\n",
-                        params[i]->name,
-                        (params[i]->description) ? params[i]->description : "no description"
-                    );
-                }
+                uprintf(
+                    "\t%s - (%s) %s\n",
+                    params[i]->name,
+                    cli_type_to_cstr(params[i]->type),
+                    (params[i]->description) ? params[i]->description : "no description"
+                );
             }
         }
     }
@@ -167,7 +165,7 @@ cli_parse_args(
                 param_successfully_parsed = true;
             }
         }
-        if (!param_successfully_parsed && params[param]->required) {
+        if (!param_successfully_parsed && params[param]->flags & CLI_FLAG_OPTION_REQUIRED) {
             CLI_WRITE_ERRORF(error, "required option %s is missing", params[param]->name);
             return;
         }
@@ -231,52 +229,36 @@ main(void)
     {
         struct cli_param param1 = {
             .name        = "param1",
-            .short_name  = "p1",
             .description = "example positional param",
+            .type        = CLI_STR,
         };
         struct cli_param param2 = {
             .name        = "-option1",
-            .short_name  = "p2",
             .description = "example option",
+            .type        = CLI_INT,
         };
 
-        struct cli_error error1 = {0};
-        cli_parse_args(
-            program_description,
-            2,
-            (struct cli_param*[]){&param1, &param2},
-            2,
-            (const char*[]){program_name, "--help"},
-            &error1
-        );
-        CLI_ASSERT(error1.code != CLI_CODE_SUCCESS);
-        assert_error_contains(&error1, program_name);
-        assert_error_contains(&error1, program_description);
-        assert_error_contains(&error1, param1.name);
-        assert_error_contains(&error1, param1.short_name);
-        assert_error_contains(&error1, param1.description);
-        assert_error_contains(&error1, param2.name);
-        assert_error_contains(&error1, param2.short_name);
-        assert_error_contains(&error1, param2.description);
-
-        struct cli_error error2 = {0};
-        cli_parse_args(
-            program_description,
-            2,
-            (struct cli_param*[]){&param1, &param2},
-            2,
-            (const char*[]){program_name, "-help"},
-            &error2
-        );
-        CLI_ASSERT(error2.code != CLI_CODE_SUCCESS);
-        assert_error_contains(&error2, program_name);
-        assert_error_contains(&error2, program_description);
-        assert_error_contains(&error2, param1.name);
-        assert_error_contains(&error2, param1.short_name);
-        assert_error_contains(&error2, param1.description);
-        assert_error_contains(&error2, param2.name);
-        assert_error_contains(&error2, param2.short_name);
-        assert_error_contains(&error2, param2.description);
+        const char* help_options[] = {"-help", "--help"};
+        for (size_t i = 0; i < sizeof help_options / sizeof *help_options; i++) {
+            struct cli_error error = {0};
+            cli_parse_args(
+                program_description,
+                2,
+                (struct cli_param*[]){&param1, &param2},
+                2,
+                (const char*[]){program_name, "--help"},
+                &error
+            );
+            TEST_ASSERT(error.code == CLI_CODE_FAILURE);
+            assert_error_contains(&error, program_name);
+            assert_error_contains(&error, program_description);
+            assert_error_contains(&error, param1.name);
+            assert_error_contains(&error, param1.description);
+            assert_error_contains(&error, "string");
+            assert_error_contains(&error, param2.name);
+            assert_error_contains(&error, param2.description);
+            assert_error_contains(&error, "int");
+        }
     }
 
     // positional args given
@@ -322,6 +304,7 @@ main(void)
             &error
         );
 
+        TEST_ASSERT(error.code == CLI_CODE_FAILURE);
         assert_error_contains(&error, param2.name);
         assert_error_contains(&error, "missing positional argument");
     }
@@ -395,27 +378,31 @@ main(void)
         TEST_ASSERT(!param2.value.str);
     }
 
-    // single option present
+    // required option missing
     //
     {
         struct cli_param param1 = {
-            .name = "--opt1",
+            .name  = "--opt1",
+            .flags = CLI_FLAG_OPTION_REQUIRED,
         };
         struct cli_param param2 = {
             .name = "--opt2",
         };
 
+        struct cli_error error = {0};
         cli_parse_args(
             program_description,
             2,
             (struct cli_param*[]){&param1, &param2},
             3,
-            (const char*[]){program_name, "--opt1", "1"},
-            NULL
+            (const char*[]){program_name, "--opt2", "2"},
+            &error
         );
 
-        TEST_ASSERT(strcmp(param1.value.str, "1") == 0);
-        TEST_ASSERT(!param2.value.str);
+        TEST_ASSERT(error.code == CLI_CODE_FAILURE);
+        assert_error_contains(&error, "--opt1");
+        assert_error_contains(&error, "missing");
+        assert_error_contains(&error, "required");
     }
 
     // option missing value
@@ -435,6 +422,7 @@ main(void)
             &error
         );
 
+        TEST_ASSERT(error.code == CLI_CODE_FAILURE);
         assert_error_contains(&error, param1.name);
         assert_error_contains(&error, "no value specified");
     }
