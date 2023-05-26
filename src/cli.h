@@ -75,4 +75,502 @@ void cli_parse_args(
     struct cli_error*  error
 );
 
+#ifdef CLI_TEST_MAIN
+
+#ifndef TEST_ASSERT
+#include <assert.h>
+#define TEST_ASSERT assert
+#endif  // TEST_ASSERT
+
+#include <stdio.h>
+#include <string.h>
+
+static void
+assert_error_contains(struct cli_error* error, const char* expected)
+{
+    size_t      expected_length = strlen(expected);
+    const char* error_reason    = error->reason;
+    while (*error_reason != '\0') {
+        if (strncmp(error_reason++, expected, expected_length) == 0) {
+            return;
+        }
+    }
+    fprintf(stderr, "expected value (%s) not found in error: \n%s\n", expected, error->reason);
+    TEST_ASSERT(0);
+}
+
+static void
+assert_f64_equal(double f1, double f2)
+{
+    static const double eps  = 1e-6;
+    double              diff = f2 - f1;
+    if (diff < 0) {
+        diff = -diff;
+    }
+    TEST_ASSERT(diff < eps);
+}
+
+struct expected_value {
+    const char*     input;
+    union cli_value value;
+};
+
+int
+main(void)
+{
+    const char* program_name        = "example";
+    const char* program_description = "example description";
+
+    // test --help
+    //
+    {
+        struct cli_param param1 = {
+            .name        = "param1",
+            .description = "example positional param",
+            .type        = CLI_STR,
+        };
+        struct cli_param param2 = {
+            .name        = "-option1",
+            .description = "example option",
+            .type        = CLI_INT,
+        };
+
+        const char* help_options[] = {"-help", "--help"};
+        for (size_t i = 0; i < sizeof help_options / sizeof *help_options; i++) {
+            struct cli_error error = {0};
+            cli_parse_args(
+                program_description,
+                2,
+                (struct cli_param*[]){&param1, &param2},
+                2,
+                (const char*[]){program_name, help_options[i]},
+                &error
+            );
+            TEST_ASSERT(error.code == CLI_CODE_FAILURE);
+            assert_error_contains(&error, program_name);
+            assert_error_contains(&error, program_description);
+            assert_error_contains(&error, param1.name);
+            assert_error_contains(&error, param1.description);
+            assert_error_contains(&error, "string");
+            assert_error_contains(&error, param2.name);
+            assert_error_contains(&error, param2.description);
+            assert_error_contains(&error, "int");
+        }
+    }
+
+    // positional args given
+    //
+    {
+        struct cli_param param1 = {
+            .name = "first param",
+        };
+        struct cli_param param2 = {
+            .name = "second param",
+        };
+
+        cli_parse_args(
+            program_description,
+            2,
+            (struct cli_param*[]){&param1, &param2},
+            3,
+            (const char*[]){program_name, "val1", "val2"},
+            NULL
+        );
+
+        TEST_ASSERT(strcmp(param1.value.str, "val1") == 0);
+        TEST_ASSERT(strcmp(param2.value.str, "val2") == 0);
+    }
+
+    // positional arg missing
+    //
+    {
+        struct cli_param param1 = {
+            .name = "first param",
+        };
+        struct cli_param param2 = {
+            .name = "second param",
+        };
+
+        struct cli_error error = {0};
+        cli_parse_args(
+            program_description,
+            2,
+            (struct cli_param*[]){&param1, &param2},
+            2,
+            (const char*[]){program_name, "val1"},
+            &error
+        );
+
+        TEST_ASSERT(error.code == CLI_CODE_FAILURE);
+        assert_error_contains(&error, param2.name);
+        assert_error_contains(&error, "missing positional argument");
+    }
+
+    // all options present
+    //
+    {
+        struct cli_param param1 = {
+            .name = "--opt1",
+        };
+        struct cli_param param2 = {
+            .name = "--opt2",
+        };
+
+        cli_parse_args(
+            program_description,
+            2,
+            (struct cli_param*[]){&param1, &param2},
+            5,
+            (const char*[]){program_name, "--opt1", "1", "--opt2", "2"},
+            NULL
+        );
+
+        TEST_ASSERT(strcmp(param1.value.str, "1") == 0);
+        TEST_ASSERT(strcmp(param2.value.str, "2") == 0);
+    }
+
+    // all options present out of order
+    //
+    {
+        struct cli_param param1 = {
+            .name = "--opt1",
+        };
+        struct cli_param param2 = {
+            .name = "--opt2",
+        };
+
+        cli_parse_args(
+            program_description,
+            2,
+            (struct cli_param*[]){&param1, &param2},
+            5,
+            (const char*[]){program_name, "--opt2", "1", "--opt1", "2"},
+            NULL
+        );
+
+        TEST_ASSERT(strcmp(param1.value.str, "2") == 0);
+        TEST_ASSERT(strcmp(param2.value.str, "1") == 0);
+    }
+
+    // single option present
+    //
+    {
+        struct cli_param param1 = {
+            .name = "--opt1",
+        };
+        struct cli_param param2 = {
+            .name = "--opt2",
+        };
+
+        cli_parse_args(
+            program_description,
+            2,
+            (struct cli_param*[]){&param1, &param2},
+            3,
+            (const char*[]){program_name, "--opt1", "1"},
+            NULL
+        );
+
+        TEST_ASSERT(strcmp(param1.value.str, "1") == 0);
+        TEST_ASSERT(!param2.value.str);
+    }
+
+    // required option missing
+    //
+    {
+        struct cli_param param1 = {
+            .name  = "--opt1",
+            .flags = CLI_FLAG_OPTION_REQUIRED,
+        };
+        struct cli_param param2 = {
+            .name = "--opt2",
+        };
+
+        struct cli_error error = {0};
+        cli_parse_args(
+            program_description,
+            2,
+            (struct cli_param*[]){&param1, &param2},
+            3,
+            (const char*[]){program_name, "--opt2", "2"},
+            &error
+        );
+
+        TEST_ASSERT(error.code == CLI_CODE_FAILURE);
+        assert_error_contains(&error, "--opt1");
+        assert_error_contains(&error, "missing");
+        assert_error_contains(&error, "required");
+    }
+
+    // option missing value
+    //
+    {
+        struct cli_param param1 = {
+            .name = "--opt1",
+        };
+
+        struct cli_error error = {0};
+        cli_parse_args(
+            program_description,
+            1,
+            (struct cli_param*[]){&param1},
+            2,
+            (const char*[]){program_name, "--opt1"},
+            &error
+        );
+
+        TEST_ASSERT(error.code == CLI_CODE_FAILURE);
+        assert_error_contains(&error, param1.name);
+        assert_error_contains(&error, "no value specified");
+    }
+
+    // flag type option is given
+    //
+    {
+        struct cli_param param1 = {
+            .name = "--opt1",
+            .type = CLI_FLAG,
+        };
+
+        cli_parse_args(
+            program_description,
+            1,
+            (struct cli_param*[]){&param1},
+            2,
+            (const char*[]){program_name, "--opt1"},
+            NULL
+        );
+
+        TEST_ASSERT(param1.value.present);
+    }
+
+    // flag type option is not given
+    //
+    {
+        struct cli_param param1 = {
+            .name = "--opt1",
+            .type = CLI_FLAG,
+        };
+
+        cli_parse_args(
+            program_description,
+            1,
+            (struct cli_param*[]){&param1},
+            1,
+            (const char*[]){program_name},
+            NULL
+        );
+
+        TEST_ASSERT(!param1.value.present);
+    }
+
+    // string validation success
+    //
+    {
+        struct expected_value expected[] = {
+            {
+                .input     = "abc",
+                .value.str = "abc",
+            },
+            {
+                .input     = "1",
+                .value.str = "1",
+            },
+            {
+                .input     = "1.23",
+                .value.str = "1.23",
+            },
+        };
+
+        for (size_t i = 0; i < sizeof expected / sizeof *expected; i++) {
+            struct cli_param param = {
+                .name = "param1",
+                .type = CLI_STR,
+            };
+            cli_parse_args(
+                program_description,
+                1,
+                (struct cli_param*[]){&param},
+                2,
+                (const char*[]){program_name, expected[i].input},
+                NULL
+            );
+
+            TEST_ASSERT(strcmp(param.value.str, expected[i].value.str) == 0);
+        }
+    }
+
+    // int validation success
+    //
+    {
+        struct expected_value expected[] = {
+            {
+                .input     = "12345",
+                .value.i64 = 12345,
+            },
+            {
+                .input     = "0",
+                .value.i64 = 0,
+            },
+            {
+                .input     = "-54321",
+                .value.i64 = -54321,
+            },
+        };
+
+
+        for (size_t i = 0; i < sizeof expected / sizeof *expected; i++) {
+            struct cli_param param = {
+                .name = "param1",
+                .type = CLI_INT,
+            };
+
+            cli_parse_args(
+                program_description,
+                1,
+                (struct cli_param*[]){&param},
+                2,
+                (const char*[]){program_name, expected[i].input},
+                NULL
+            );
+
+            TEST_ASSERT(param.value.i64 == expected[i].value.i64);
+        }
+    }
+
+    // int validation failure
+    //
+    {
+        struct cli_param param1 = {
+            .name = "param1",
+            .type = CLI_INT,
+        };
+
+        const char* failing_inputs[] = {
+            "0.0",
+            "1.0",
+            ".1",
+            "1.",
+            "-0.1",
+            "-.1",
+            "-1.",
+            "abc",
+            "123abc",
+            "-123abc",
+        };
+
+        for (size_t i = 0; i < sizeof failing_inputs / sizeof *failing_inputs; i++) {
+            struct cli_error error = {0};
+            cli_parse_args(
+                program_description,
+                1,
+                (struct cli_param*[]){&param1},
+                2,
+                (const char*[]){program_name, failing_inputs[i]},
+                &error
+            );
+
+            TEST_ASSERT(error.code == CLI_CODE_FAILURE);
+            assert_error_contains(&error, "param1");
+            assert_error_contains(&error, "int");
+            assert_error_contains(&error, failing_inputs[i]);
+        }
+    }
+
+    // float validation success
+    //
+    {
+        struct expected_value expected[] = {
+            {
+                .input     = "12345",
+                .value.f64 = 12345.,
+            },
+            {
+                .input     = "0",
+                .value.f64 = 0.,
+            },
+            {
+                .input     = "-54321",
+                .value.f64 = -54321.,
+            },
+            {
+                .input     = "-1.23",
+                .value.f64 = -1.23,
+            },
+            {
+                .input     = "1.23",
+                .value.f64 = 1.23,
+            },
+            {
+                .input     = "0.0",
+                .value.f64 = 0.0,
+            },
+            {
+                .input     = "1.",
+                .value.f64 = 1.,
+            },
+            {
+                .input     = "-1.",
+                .value.f64 = -1.,
+            },
+        };
+
+
+        for (size_t i = 0; i < sizeof expected / sizeof *expected; i++) {
+            struct cli_param param = {
+                .name = "param1",
+                .type = CLI_FLOAT,
+            };
+
+            cli_parse_args(
+                program_description,
+                1,
+                (struct cli_param*[]){&param},
+                2,
+                (const char*[]){program_name, expected[i].input},
+                NULL
+            );
+
+            assert_f64_equal(param.value.f64, expected[i].value.f64);
+        }
+    }
+
+    // float validation failure
+    //
+    {
+        struct cli_param param1 = {
+            .name = "param1",
+            .type = CLI_FLOAT,
+        };
+
+        const char* failing_inputs[] = {
+            "abc",
+            "123.abc",
+            "-123.abc",
+        };
+
+        for (size_t i = 0; i < sizeof failing_inputs / sizeof *failing_inputs; i++) {
+            struct cli_error error = {0};
+            cli_parse_args(
+                program_description,
+                1,
+                (struct cli_param*[]){&param1},
+                2,
+                (const char*[]){program_name, failing_inputs[i]},
+                &error
+            );
+
+            TEST_ASSERT(error.code == CLI_CODE_FAILURE);
+            assert_error_contains(&error, "param1");
+            assert_error_contains(&error, "float");
+            assert_error_contains(&error, failing_inputs[i]);
+        }
+    }
+
+    printf("%s tests passed\n", __FILE__);
+    return 0;
+}
+
+#endif  // CLI_TEST_MAIN
+
 #endif  // CLI_H

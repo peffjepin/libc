@@ -1,4 +1,4 @@
-.PHONY = test test-release
+.PHONY = test test-release clean
 
 CC ?= gcc
 EXTRA_FLAGS ?=
@@ -20,4 +20,5 @@ test-release:
 	$(CC) $(FLAGS) $(RELEASE_FLAGS) -DSTRING_VIEW_TEST_MAIN src/string_view.c -o build/test_string_view && ./build/test_string_view
 	$(CC) $(FLAGS) $(RELEASE_FLAGS) -DCLI_TEST_MAIN src/cli.c -o build/test_cli && ./build/test_cli
 
-
+clean:
+	rm -rf build
