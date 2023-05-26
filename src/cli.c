@@ -99,7 +99,50 @@ done:
     CLI_WRITE_ERROR(error, usage_buffer);
 }
 
+static union cli_value
+cli_parse_value(const char* input, enum cli_type type, int* error)
+{
+    CLI_ASSERT(error);
+
+    *error                = 0;
+    union cli_value value = {0};
+
+    if (!input || *input == '\0') {
+        *error = 1;
+        return value;
+    }
+
+    switch (type) {
+        case CLI_FLAG:
+            CLI_ASSERT(0 && "unreachable");
+            break;
+        case CLI_STR:
+            value.str = input;
+            break;
+        case CLI_INT: {
+            char* endptr;
+            value.i64 = strtoll(input, &endptr, 10);
+            if (*endptr != '\0') {
+                *error = 1;
+            }
+            break;
+        }
+        case CLI_FLOAT: {
+            char* endptr;
+            value.f64 = strtod(input, &endptr);
+            if (*endptr != '\0') {
+                *error = 1;
+            }
+            break;
+        }
+    }
+
+    return value;
+}
+
+#ifndef ARGC_MAX
 #define ARGC_MAX 256
+#endif
 
 void
 cli_parse_args(
@@ -115,7 +158,9 @@ cli_parse_args(
     CLI_ASSERT(params_count > 0);
 
     if (argc > ARGC_MAX) {
-        CLI_WRITE_ERRORF(error, "max argc of %i exceeded -- consider raising ARGC_MAX", ARGC_MAX);
+        CLI_WRITE_ERRORF(
+            error, "max argc of %i exceeded -- `#define ARGC_MAX (n)` to raise capacity", ARGC_MAX
+        );
         return;
     }
     for (size_t i = 1; i < (size_t)argc; i++) {
@@ -158,8 +203,20 @@ cli_parse_args(
                         );
                         return;
                     }
-                    params[param]->value.str = argv[arg];
-                    already_parsed[arg]      = true;
+                    int parsing_error = 0;
+                    params[param]->value =
+                        cli_parse_value(argv[arg], params[param]->type, &parsing_error);
+                    if (parsing_error) {
+                        CLI_WRITE_ERRORF(
+                            error,
+                            "option `%s` (%s) given value (%s) is invalid",
+                            params[param]->name,
+                            cli_type_to_cstr(params[param]->type),
+                            argv[arg]
+                        );
+                        return;
+                    }
+                    already_parsed[arg] = true;
                 }
 
                 param_successfully_parsed = true;
@@ -182,7 +239,18 @@ cli_parse_args(
             if (already_parsed[arg]) {
                 continue;
             }
-            params[param]->value.str  = argv[arg];
+            int parsing_error    = 0;
+            params[param]->value = cli_parse_value(argv[arg], params[param]->type, &parsing_error);
+            if (parsing_error) {
+                CLI_WRITE_ERRORF(
+                    error,
+                    "positional argument `%s` (%s) given value (%s) is invalid",
+                    params[param]->name,
+                    cli_type_to_cstr(params[param]->type),
+                    argv[arg]
+                );
+                return;
+            }
             already_parsed[arg]       = true;
             param_successfully_parsed = true;
             break;
@@ -218,6 +286,22 @@ assert_error_contains(struct cli_error* error, const char* expected)
     TEST_ASSERT(0);
 }
 
+static void
+assert_f64_equal(double f1, double f2)
+{
+    static const double eps  = 1e-6;
+    double              diff = f2 - f1;
+    if (diff < 0) {
+        diff = -diff;
+    }
+    TEST_ASSERT(diff < eps);
+}
+
+struct expected_value {
+    const char*     input;
+    union cli_value value;
+};
+
 int
 main(void)
 {
@@ -246,7 +330,7 @@ main(void)
                 2,
                 (struct cli_param*[]){&param1, &param2},
                 2,
-                (const char*[]){program_name, "--help"},
+                (const char*[]){program_name, help_options[i]},
                 &error
             );
             TEST_ASSERT(error.code == CLI_CODE_FAILURE);
@@ -465,6 +549,209 @@ main(void)
         );
 
         TEST_ASSERT(!param1.value.present);
+    }
+
+    // string validation success
+    //
+    {
+        struct expected_value expected[] = {
+            {
+                .input     = "abc",
+                .value.str = "abc",
+            },
+            {
+                .input     = "1",
+                .value.str = "1",
+            },
+            {
+                .input     = "1.23",
+                .value.str = "1.23",
+            },
+        };
+
+        for (size_t i = 0; i < sizeof expected / sizeof *expected; i++) {
+            struct cli_param param = {
+                .name = "param1",
+                .type = CLI_STR,
+            };
+            cli_parse_args(
+                program_description,
+                1,
+                (struct cli_param*[]){&param},
+                2,
+                (const char*[]){program_name, expected[i].input},
+                NULL
+            );
+
+            TEST_ASSERT(strcmp(param.value.str, expected[i].value.str) == 0);
+        }
+    }
+
+    // int validation success
+    //
+    {
+        struct expected_value expected[] = {
+            {
+                .input     = "12345",
+                .value.i64 = 12345,
+            },
+            {
+                .input     = "0",
+                .value.i64 = 0,
+            },
+            {
+                .input     = "-54321",
+                .value.i64 = -54321,
+            },
+        };
+
+
+        for (size_t i = 0; i < sizeof expected / sizeof *expected; i++) {
+            struct cli_param param = {
+                .name = "param1",
+                .type = CLI_INT,
+            };
+
+            cli_parse_args(
+                program_description,
+                1,
+                (struct cli_param*[]){&param},
+                2,
+                (const char*[]){program_name, expected[i].input},
+                NULL
+            );
+
+            TEST_ASSERT(param.value.i64 == expected[i].value.i64);
+        }
+    }
+
+    // int validation failure
+    //
+    {
+        struct cli_param param1 = {
+            .name = "param1",
+            .type = CLI_INT,
+        };
+
+        const char* failing_inputs[] = {
+            "0.0",
+            "1.0",
+            ".1",
+            "1.",
+            "-0.1",
+            "-.1",
+            "-1.",
+            "abc",
+            "123abc",
+            "-123abc",
+        };
+
+        for (size_t i = 0; i < sizeof failing_inputs / sizeof *failing_inputs; i++) {
+            struct cli_error error = {0};
+            cli_parse_args(
+                program_description,
+                1,
+                (struct cli_param*[]){&param1},
+                2,
+                (const char*[]){program_name, failing_inputs[i]},
+                &error
+            );
+
+            TEST_ASSERT(error.code == CLI_CODE_FAILURE);
+            assert_error_contains(&error, "param1");
+            assert_error_contains(&error, "int");
+            assert_error_contains(&error, failing_inputs[i]);
+        }
+    }
+
+    // float validation success
+    //
+    {
+        struct expected_value expected[] = {
+            {
+                .input     = "12345",
+                .value.f64 = 12345.,
+            },
+            {
+                .input     = "0",
+                .value.f64 = 0.,
+            },
+            {
+                .input     = "-54321",
+                .value.f64 = -54321.,
+            },
+            {
+                .input     = "-1.23",
+                .value.f64 = -1.23,
+            },
+            {
+                .input     = "1.23",
+                .value.f64 = 1.23,
+            },
+            {
+                .input     = "0.0",
+                .value.f64 = 0.0,
+            },
+            {
+                .input     = "1.",
+                .value.f64 = 1.,
+            },
+            {
+                .input     = "-1.",
+                .value.f64 = -1.,
+            },
+        };
+
+
+        for (size_t i = 0; i < sizeof expected / sizeof *expected; i++) {
+            struct cli_param param = {
+                .name = "param1",
+                .type = CLI_FLOAT,
+            };
+
+            cli_parse_args(
+                program_description,
+                1,
+                (struct cli_param*[]){&param},
+                2,
+                (const char*[]){program_name, expected[i].input},
+                NULL
+            );
+
+            assert_f64_equal(param.value.f64, expected[i].value.f64);
+        }
+    }
+
+    // float validation failure
+    //
+    {
+        struct cli_param param1 = {
+            .name = "param1",
+            .type = CLI_FLOAT,
+        };
+
+        const char* failing_inputs[] = {
+            "abc",
+            "123.abc",
+            "-123.abc",
+        };
+
+        for (size_t i = 0; i < sizeof failing_inputs / sizeof *failing_inputs; i++) {
+            struct cli_error error = {0};
+            cli_parse_args(
+                program_description,
+                1,
+                (struct cli_param*[]){&param1},
+                2,
+                (const char*[]){program_name, failing_inputs[i]},
+                &error
+            );
+
+            TEST_ASSERT(error.code == CLI_CODE_FAILURE);
+            assert_error_contains(&error, "param1");
+            assert_error_contains(&error, "float");
+            assert_error_contains(&error, failing_inputs[i]);
+        }
     }
 
     printf("%s tests passed\n", __FILE__);

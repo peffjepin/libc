@@ -26,7 +26,7 @@ union cli_value {
 
 struct cli_validation {
     enum {
-        CLI_VALIDATION_NONE = 0,
+        CLI_VALIDATION_TYPES_ONLY = 0,
         CLI_VALIDATION_RANGE,
         CLI_VALIDATION_CHOICES,
     } strategy;
