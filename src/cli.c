@@ -73,6 +73,44 @@ print_param_choices(struct info_printer* printer, const struct cli_param* param)
 }
 
 static void
+print_param_range(struct info_printer* printer, const struct cli_param* param)
+{
+    CLI_ASSERT(printer);
+    CLI_ASSERT(param);
+    CLI_ASSERT(param->validation.strategy == CLI_VALIDATION_RANGE);
+
+    switch (param->type) {
+        case CLI_STR:
+            INFO_PRINTF(
+                printer,
+                "[%s, %s)",
+                param->validation.range.start.str,
+                param->validation.range.stop.str
+            );
+            break;
+        case CLI_FLOAT:
+            INFO_PRINTF(
+                printer,
+                "[%f, %f)",
+                param->validation.range.start.f64,
+                param->validation.range.stop.f64
+            );
+            break;
+        case CLI_FLAG:
+            CLI_ASSERT(0 && "unreachable");
+            break;
+        case CLI_INT:
+            INFO_PRINTF(
+                printer,
+                "[%li, %li)",
+                param->validation.range.start.i64,
+                param->validation.range.stop.i64
+            );
+            break;
+    }
+}
+
+static void
 print_param_docs(struct info_printer* printer, const struct cli_param* param)
 {
     INFO_PRINTF(
@@ -86,6 +124,9 @@ print_param_docs(struct info_printer* printer, const struct cli_param* param)
         case CLI_VALIDATION_TYPES_ONLY:
             break;
         case CLI_VALIDATION_RANGE:
+            INFO_PRINT(printer, "\t  ");
+            print_param_range(printer, param);
+            INFO_PRINT(printer, "\n");
             break;
         case CLI_VALIDATION_CHOICES:
             INFO_PRINT(printer, "\t  ");
@@ -197,7 +238,9 @@ cli_param_parse_input_value(const char* input, struct cli_param* param, struct c
             if (!valid) {
                 char                error_buffer[sizeof error->reason];
                 struct info_printer printer = {
-                    .buffer = error_buffer, .remaining = sizeof error_buffer};
+                    .buffer    = error_buffer,
+                    .remaining = sizeof error_buffer,
+                };
                 INFO_PRINTF(
                     &printer, "value (%s) given for param `%s` not in choices ", input, param->name
                 );
@@ -206,8 +249,49 @@ cli_param_parse_input_value(const char* input, struct cli_param* param, struct c
             }
             break;
         }
-        case CLI_VALIDATION_RANGE:
+        case CLI_VALIDATION_RANGE: {
+            bool valid = false;
+
+            switch (param->type) {
+                case CLI_STR: {
+                    int lcmp = strcmp(param->value.str, param->validation.range.start.str);
+                    int rcmp = strcmp(param->value.str, param->validation.range.stop.str);
+                    if (lcmp >= 0 && rcmp < 0) {
+                        valid = true;
+                    }
+                    break;
+                }
+                case CLI_INT:
+                    if (param->value.i64 >= param->validation.range.start.i64 &&
+                        param->value.i64 < param->validation.range.stop.i64) {
+                        valid = true;
+                    }
+                    break;
+                case CLI_FLOAT:
+                    if (param->value.f64 >= param->validation.range.start.f64 &&
+                        param->value.f64 < param->validation.range.stop.f64) {
+                        valid = true;
+                    }
+                    break;
+                case CLI_FLAG:
+                    CLI_ASSERT(0 && "unreachable");
+                    break;
+            }
+            if (!valid) {
+                char                error_buffer[sizeof error->reason];
+                struct info_printer printer = {
+                    .buffer    = error_buffer,
+                    .remaining = sizeof error_buffer,
+                };
+                INFO_PRINTF(
+                    &printer, "value (%s) given for param `%s` not in range ", input, param->name
+                );
+                print_param_range(&printer, param);
+                CLI_WRITE_ERROR(error, error_buffer);
+            }
+
             break;
+        }
     }
 }
 

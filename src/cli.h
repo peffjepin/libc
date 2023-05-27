@@ -134,27 +134,86 @@ main(void)
             .description = "example option",
             .type        = CLI_INT,
         };
+        struct cli_param param3 = {
+            .name        = "param3",
+            .description = "string choices",
+            .type        = CLI_STR,
+            .validation =
+                {
+                    .strategy = CLI_VALIDATION_CHOICES,
+                    .choices =
+                        {
+                            .count  = 2,
+                            .values = (const char*[]){"choice1", "choice2"},
+                        },
+                },
+        };
+        struct cli_param param4 = {
+            .name        = "param4",
+            .description = "float choices",
+            .type        = CLI_FLOAT,
+            .validation =
+                {
+                    .strategy = CLI_VALIDATION_CHOICES,
+                    .choices =
+                        {
+                            .count  = 2,
+                            .values = (const char*[]){"123.0", "321.0"},
+                        },
+                },
+        };
+        struct cli_param param5 = {
+            .name        = "param5",
+            .description = "int range",
+            .type        = CLI_INT,
+            .validation =
+                {
+                    .strategy = CLI_VALIDATION_RANGE,
+                    .range =
+                        {
+                            .start.i64 = 0,
+                            .stop.i64  = 10,
+                        },
+                },
+        };
 
         const char* help_options[] = {"-help", "--help"};
         for (size_t i = 0; i < sizeof help_options / sizeof *help_options; i++) {
             struct cli_error error = {0};
             cli_parse_args(
                 program_description,
-                2,
-                (struct cli_param*[]){&param1, &param2},
+                5,
+                (struct cli_param*[]){&param1, &param2, &param3, &param4, &param5},
                 2,
                 (const char*[]){program_name, help_options[i]},
                 &error
             );
             TEST_ASSERT(error.code == CLI_CODE_FAILURE);
+
             assert_error_contains(&error, program_name);
             assert_error_contains(&error, program_description);
+
             assert_error_contains(&error, param1.name);
             assert_error_contains(&error, param1.description);
             assert_error_contains(&error, "string");
+
             assert_error_contains(&error, param2.name);
             assert_error_contains(&error, param2.description);
             assert_error_contains(&error, "int");
+
+            assert_error_contains(&error, param3.name);
+            assert_error_contains(&error, param3.description);
+            assert_error_contains(&error, "choice1");
+            assert_error_contains(&error, "choice2");
+
+            assert_error_contains(&error, param4.name);
+            assert_error_contains(&error, param4.description);
+            assert_error_contains(&error, "123");
+            assert_error_contains(&error, "321");
+
+            assert_error_contains(&error, param5.name);
+            assert_error_contains(&error, param5.description);
+            assert_error_contains(&error, "[0, 10)");
         }
     }
 
@@ -567,53 +626,6 @@ main(void)
         }
     }
 
-    // choices appear in help message
-    //
-    {
-        struct cli_param str_param = {
-            .name = "param1",
-            .type = CLI_STR,
-            .validation =
-                {
-                    .strategy = CLI_VALIDATION_CHOICES,
-                    .choices =
-                        {
-                            .count  = 2,
-                            .values = (const char*[]){"choice1", "choice2"},
-                        },
-                },
-        };
-        struct cli_param int_param = {
-            .name = "param2",
-            .type = CLI_INT,
-            .validation =
-                {
-                    .strategy = CLI_VALIDATION_CHOICES,
-                    .choices =
-                        {
-                            .count  = 2,
-                            .values = (const char*[]){"123", "321"},
-                        },
-                },
-        };
-
-        struct cli_error error = {0};
-        cli_parse_args(
-            program_description,
-            2,
-            (struct cli_param*[]){&str_param, &int_param},
-            2,
-            (const char*[]){program_name, "--help"},
-            &error
-        );
-
-        TEST_ASSERT(error.code == CLI_CODE_FAILURE);
-        assert_error_contains(&error, "choice1");
-        assert_error_contains(&error, "choice2");
-        assert_error_contains(&error, "123");
-        assert_error_contains(&error, "321");
-    }
-
     // argument not present in choices
     //
     {
@@ -674,6 +686,56 @@ main(void)
         );
 
         TEST_ASSERT(param.value.i64 == 456);
+    }
+
+    // range validation
+    //
+    {
+        struct cli_param param = {
+            .name = "param1",
+            .type = CLI_INT,
+            .validation =
+                {
+                    .strategy = CLI_VALIDATION_RANGE,
+                    .range =
+                        {
+                            .start.i64 = 0,
+                            .stop.i64  = 10,
+                        },
+                },
+        };
+
+        const char* out_of_range_values[] = {"-1", "10", "100"};
+        for (size_t i = 0; i < sizeof out_of_range_values / sizeof *out_of_range_values; i++) {
+            struct cli_error error = {0};
+            cli_parse_args(
+                program_description,
+                1,
+                (struct cli_param*[]){&param},
+                2,
+                (const char*[]){program_name, out_of_range_values[i]},
+                &error
+            );
+            assert_error_contains(&error, out_of_range_values[i]);
+            assert_error_contains(&error, "[0, 10)");
+        }
+
+        struct expected_value in_range_values[] = {
+            {.input = "0", .value.i64 = 0},
+            {.input = "9", .value.i64 = 9},
+            {.input = "5", .value.i64 = 5},
+        };
+        for (size_t i = 0; i < sizeof in_range_values / sizeof *in_range_values; i++) {
+            cli_parse_args(
+                program_description,
+                1,
+                (struct cli_param*[]){&param},
+                2,
+                (const char*[]){program_name, in_range_values[i].input},
+                NULL
+            );
+            TEST_ASSERT(param.value.i64 == in_range_values[i].value.i64);
+        }
     }
 
     printf("%s tests passed\n", __FILE__);
