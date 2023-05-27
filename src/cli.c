@@ -20,10 +20,7 @@
         (error)->code = CLI_CODE_FAILURE;                                                          \
     } while (0)
 
-#define CLI_WRITE_ERROR(error, message)                                                            \
-    do {                                                                                           \
-        CLI_WRITE_ERRORF(error, "%s", message);                                                    \
-    } while (0)
+#define CLI_WRITE_ERROR(error, message) CLI_WRITE_ERRORF(error, "%s", message);
 
 static const char*
 cli_type_to_cstr(enum cli_type type)
@@ -41,6 +38,63 @@ cli_type_to_cstr(enum cli_type type)
     CLI_ASSERT(0 && "unreachable");
 }
 
+struct info_printer {
+    char* buffer;
+    int   remaining;
+};
+
+#define INFO_PRINTF(info_printer, fmt, ...)                                                        \
+    do {                                                                                           \
+        if ((info_printer)->remaining <= 0) {                                                      \
+            break;                                                                                 \
+        }                                                                                          \
+        int written =                                                                              \
+            snprintf((info_printer)->buffer, (info_printer)->remaining, fmt, __VA_ARGS__);         \
+        (info_printer)->remaining -= written;                                                      \
+        (info_printer)->buffer += written;                                                         \
+    } while (0)
+
+#define INFO_PRINT(info_printer, msg) INFO_PRINTF(info_printer, "%s", msg)
+
+static void
+print_param_choices(struct info_printer* printer, const struct cli_param* param)
+{
+    CLI_ASSERT(param);
+    CLI_ASSERT(param->validation.strategy == CLI_VALIDATION_CHOICES);
+
+    INFO_PRINT(printer, "{");
+    for (size_t i = 0; i < param->validation.choices.count; i++) {
+        if (i > 0) {
+            INFO_PRINT(printer, ", ");
+        }
+        INFO_PRINT(printer, param->validation.choices.values[i]);
+    }
+    INFO_PRINT(printer, "}");
+}
+
+static void
+print_param_docs(struct info_printer* printer, const struct cli_param* param)
+{
+    INFO_PRINTF(
+        printer,
+        "\t%s (%s) - %s\n",
+        param->name,
+        cli_type_to_cstr(param->type),
+        (param->description) ? param->description : "no description"
+    );
+    switch (param->validation.strategy) {
+        case CLI_VALIDATION_TYPES_ONLY:
+            break;
+        case CLI_VALIDATION_RANGE:
+            break;
+        case CLI_VALIDATION_CHOICES:
+            INFO_PRINT(printer, "\t  ");
+            print_param_choices(printer, param);
+            INFO_PRINT(printer, "\n");
+            break;
+    }
+}
+
 static void
 write_usage_to_error(
     const char*        program_name,
@@ -50,94 +104,111 @@ write_usage_to_error(
     struct cli_error*  error
 )
 {
-    char usage_buffer[sizeof error->reason];
-    int  written       = 0;
-    int  options_count = 0;
+    char                usage_buffer[sizeof error->reason];
+    struct info_printer printer = {
+        .buffer    = usage_buffer,
+        .remaining = sizeof usage_buffer,
+    };
+    int options_count = 0;
 
-#define uprintf(fmt, ...)                                                                          \
-    written +=                                                                                     \
-        snprintf(usage_buffer + written, (int)sizeof usage_buffer - written, fmt, __VA_ARGS__);    \
-    if (written >= (int)sizeof usage_buffer) {                                                     \
-        goto done;                                                                                 \
-    }
-
-    uprintf("%s: %s\n\n", program_name, program_description);
-    uprintf("%s:\n", "positional arguments");
+    INFO_PRINTF(&printer, "%s: %s\n\n", program_name, program_description);
+    INFO_PRINTF(&printer, "%s:\n", "positional arguments");
 
     for (size_t i = 0; i < params_count; i++) {
-        if (params[i]->name[0] != '-') {
-            uprintf(
-                "\t%s - (%s) %s\n",
-                params[i]->name,
-                cli_type_to_cstr(params[i]->type),
-                (params[i]->description) ? params[i]->description : "no description"
-            );
-        }
-        else {
+        if (params[i]->name[0] == '-') {
             options_count += 1;
+            continue;
         }
+        print_param_docs(&printer, params[i]);
     }
-    uprintf("%s", "\n");
+    INFO_PRINTF(&printer, "%s", "\n");
 
     if (options_count) {
-        uprintf("%s:\n", "options");
+        INFO_PRINTF(&printer, "%s:\n", "options");
         for (size_t i = 0; i < params_count; i++) {
             if (params[i]->name[0] == '-') {
-                uprintf(
-                    "\t%s - (%s) %s\n",
-                    params[i]->name,
-                    cli_type_to_cstr(params[i]->type),
-                    (params[i]->description) ? params[i]->description : "no description"
-                );
+                print_param_docs(&printer, params[i]);
             }
         }
     }
 
-#undef uprintf
-
-done:
     CLI_WRITE_ERROR(error, usage_buffer);
 }
 
-static union cli_value
-cli_parse_value(const char* input, enum cli_type type, int* error)
+static void
+cli_param_parse_input_value(const char* input, struct cli_param* param, struct cli_error* error)
 {
-    CLI_ASSERT(error);
-
-    *error                = 0;
-    union cli_value value = {0};
+    CLI_ASSERT(param);
 
     if (!input || *input == '\0') {
-        *error = 1;
-        return value;
+        CLI_WRITE_ERRORF(error, "invalid input value (empty) for param `%s`", param->name);
     }
 
-    switch (type) {
+    switch (param->type) {
         case CLI_FLAG:
             CLI_ASSERT(0 && "unreachable");
             break;
         case CLI_STR:
-            value.str = input;
+            param->value.str = input;
             break;
         case CLI_INT: {
             char* endptr;
-            value.i64 = strtoll(input, &endptr, 10);
+            param->value.i64 = strtoll(input, &endptr, 10);
             if (*endptr != '\0') {
-                *error = 1;
+                CLI_WRITE_ERRORF(
+                    error,
+                    "expecting %s type for param `%s` but got value `%s`",
+                    cli_type_to_cstr(param->type),
+                    param->name,
+                    input
+                );
+                return;
             }
             break;
         }
         case CLI_FLOAT: {
             char* endptr;
-            value.f64 = strtod(input, &endptr);
+            param->value.f64 = strtod(input, &endptr);
             if (*endptr != '\0') {
-                *error = 1;
+                CLI_WRITE_ERRORF(
+                    error,
+                    "expecting %s type for param `%s` but got value `%s`",
+                    cli_type_to_cstr(param->type),
+                    param->name,
+                    input
+                );
+                return;
             }
             break;
         }
     }
 
-    return value;
+    switch (param->validation.strategy) {
+        case CLI_VALIDATION_TYPES_ONLY:
+            break;
+        case CLI_VALIDATION_CHOICES: {
+            bool valid = false;
+            for (size_t i = 0; i < param->validation.choices.count; i++) {
+                if (strcmp(input, param->validation.choices.values[i]) == 0) {
+                    valid = true;
+                    break;
+                }
+            }
+            if (!valid) {
+                char                error_buffer[sizeof error->reason];
+                struct info_printer printer = {
+                    .buffer = error_buffer, .remaining = sizeof error_buffer};
+                INFO_PRINTF(
+                    &printer, "value (%s) given for param `%s` not in choices ", input, param->name
+                );
+                print_param_choices(&printer, param);
+                CLI_WRITE_ERROR(error, error_buffer);
+            }
+            break;
+        }
+        case CLI_VALIDATION_RANGE:
+            break;
+    }
 }
 
 #ifndef ARGC_MAX
@@ -203,17 +274,8 @@ cli_parse_args(
                         );
                         return;
                     }
-                    int parsing_error = 0;
-                    params[param]->value =
-                        cli_parse_value(argv[arg], params[param]->type, &parsing_error);
-                    if (parsing_error) {
-                        CLI_WRITE_ERRORF(
-                            error,
-                            "option `%s` (%s) given value (%s) is invalid",
-                            params[param]->name,
-                            cli_type_to_cstr(params[param]->type),
-                            argv[arg]
-                        );
+                    cli_param_parse_input_value(argv[arg], params[param], error);
+                    if (CLI_ERROR_IS_SET(error)) {
                         return;
                     }
                     already_parsed[arg] = true;
@@ -239,16 +301,8 @@ cli_parse_args(
             if (already_parsed[arg]) {
                 continue;
             }
-            int parsing_error    = 0;
-            params[param]->value = cli_parse_value(argv[arg], params[param]->type, &parsing_error);
-            if (parsing_error) {
-                CLI_WRITE_ERRORF(
-                    error,
-                    "positional argument `%s` (%s) given value (%s) is invalid",
-                    params[param]->name,
-                    cli_type_to_cstr(params[param]->type),
-                    argv[arg]
-                );
+            cli_param_parse_input_value(argv[arg], params[param], error);
+            if (CLI_ERROR_IS_SET(error)) {
                 return;
             }
             already_parsed[arg]       = true;
@@ -260,6 +314,5 @@ cli_parse_args(
             return;
         }
     }
-
     // TODO: warn on unrecognized args
 }

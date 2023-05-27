@@ -38,8 +38,8 @@ struct cli_validation {
         } range;
 
         struct {
-            size_t           count;
-            union cli_value* values;
+            size_t       count;
+            const char** values;
         } choices;
     };
 };
@@ -565,6 +565,115 @@ main(void)
             assert_error_contains(&error, "float");
             assert_error_contains(&error, failing_inputs[i]);
         }
+    }
+
+    // choices appear in help message
+    //
+    {
+        struct cli_param str_param = {
+            .name = "param1",
+            .type = CLI_STR,
+            .validation =
+                {
+                    .strategy = CLI_VALIDATION_CHOICES,
+                    .choices =
+                        {
+                            .count  = 2,
+                            .values = (const char*[]){"choice1", "choice2"},
+                        },
+                },
+        };
+        struct cli_param int_param = {
+            .name = "param2",
+            .type = CLI_INT,
+            .validation =
+                {
+                    .strategy = CLI_VALIDATION_CHOICES,
+                    .choices =
+                        {
+                            .count  = 2,
+                            .values = (const char*[]){"123", "321"},
+                        },
+                },
+        };
+
+        struct cli_error error = {0};
+        cli_parse_args(
+            program_description,
+            2,
+            (struct cli_param*[]){&str_param, &int_param},
+            2,
+            (const char*[]){program_name, "--help"},
+            &error
+        );
+
+        TEST_ASSERT(error.code == CLI_CODE_FAILURE);
+        assert_error_contains(&error, "choice1");
+        assert_error_contains(&error, "choice2");
+        assert_error_contains(&error, "123");
+        assert_error_contains(&error, "321");
+    }
+
+    // argument not present in choices
+    //
+    {
+        struct cli_param param = {
+            .name = "param1",
+            .type = CLI_STR,
+            .validation =
+                {
+                    .strategy = CLI_VALIDATION_CHOICES,
+                    .choices =
+                        {
+                            .count  = 2,
+                            .values = (const char*[]){"choice1", "choice2"},
+                        },
+                },
+        };
+
+        struct cli_error error = {0};
+        cli_parse_args(
+            program_description,
+            1,
+            (struct cli_param*[]){&param},
+            2,
+            (const char*[]){program_name, "choice3"},
+            &error
+        );
+
+        TEST_ASSERT(error.code == CLI_CODE_FAILURE);
+        assert_error_contains(&error, "choice1");
+        assert_error_contains(&error, "choice2");
+        assert_error_contains(&error, "choice3");
+    }
+
+    // argument is present in choices
+    //
+    {
+        struct cli_param param = {
+            .name = "param1",
+            .type = CLI_INT,
+            .validation =
+                {
+                    .strategy = CLI_VALIDATION_CHOICES,
+                    .choices =
+                        {
+                            .count  = 2,
+                            .values = (const char*[]){"123", "456"},
+                        },
+                },
+        };
+
+        cli_parse_args(
+            program_description,
+            1,
+            (struct cli_param*[]){&param},
+            2,
+            (const char*[]){program_name, "456"},
+            NULL
+        );
+
+        TEST_ASSERT(param.value.i64 == 456);
     }
 
     printf("%s tests passed\n", __FILE__);
