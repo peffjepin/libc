@@ -6,21 +6,25 @@
 
 #define CLI_ERROR_IS_SET(error) ((error) != NULL && (error)->code != CLI_CODE_SUCCESS)
 
-#define CLI_WRITE_ERRORF(error, fmt, ...)                                                          \
+#define CLI_WRITE_ERRORF(error, cli_code, fmt, ...)                                                \
     do {                                                                                           \
         if (!(error)) {                                                                            \
             fprintf(stderr, fmt, __VA_ARGS__);                                                     \
             fprintf(stderr, "\n");                                                                 \
-            exit(EXIT_FAILURE);                                                                    \
+            if ((cli_code) == CLI_CODE_FAILURE) {                                                  \
+                exit(EXIT_FAILURE);                                                                \
+            }                                                                                      \
         }                                                                                          \
-        if (snprintf((error)->reason, sizeof((error)->reason), fmt, __VA_ARGS__) >=                \
-            (int)sizeof((error)->reason)) {                                                        \
-            memcpy((error)->reason + sizeof((error)->reason) - 3, "..", 3);                        \
+        else {                                                                                     \
+            if (snprintf((error)->reason, sizeof((error)->reason), fmt, __VA_ARGS__) >=            \
+                (int)sizeof((error)->reason)) {                                                    \
+                memcpy((error)->reason + sizeof((error)->reason) - 3, "..", 3);                    \
+            }                                                                                      \
+            (error)->code = (cli_code);                                                            \
         }                                                                                          \
-        (error)->code = CLI_CODE_FAILURE;                                                          \
     } while (0)
 
-#define CLI_WRITE_ERROR(error, message) CLI_WRITE_ERRORF(error, "%s", message);
+#define CLI_WRITE_ERROR(error, code, message) CLI_WRITE_ERRORF(error, code, "%s", message);
 
 static const char*
 cli_type_to_cstr(enum cli_type type)
@@ -83,7 +87,7 @@ print_param_range(struct info_printer* printer, const struct cli_param* param)
         case CLI_STR:
             INFO_PRINTF(
                 printer,
-                "[%s, %s)",
+                "[%s-%s]",
                 param->validation.range.start.str,
                 param->validation.range.stop.str
             );
@@ -91,7 +95,7 @@ print_param_range(struct info_printer* printer, const struct cli_param* param)
         case CLI_FLOAT:
             INFO_PRINTF(
                 printer,
-                "[%f, %f)",
+                "[%f-%f]",
                 param->validation.range.start.f64,
                 param->validation.range.stop.f64
             );
@@ -102,7 +106,7 @@ print_param_range(struct info_printer* printer, const struct cli_param* param)
         case CLI_INT:
             INFO_PRINTF(
                 printer,
-                "[%li, %li)",
+                "[%li-%li]",
                 param->validation.range.start.i64,
                 param->validation.range.stop.i64
             );
@@ -173,7 +177,27 @@ write_usage_to_error(
         }
     }
 
-    CLI_WRITE_ERROR(error, usage_buffer);
+    CLI_WRITE_ERROR(error, CLI_CODE_FAILURE, usage_buffer);
+}
+
+static int
+cli_value_compare(union cli_value v1, union cli_value v2, enum cli_type type)
+{
+    switch (type) {
+        case CLI_STR:
+            return strcmp(v1.str, v2.str);
+        case CLI_FLAG:
+            return 0;
+        case CLI_FLOAT:
+            if (v1.f64 == v2.f64) return 0;
+            if (v1.f64 < v2.f64) return -1;
+            return 1;
+        case CLI_INT:
+            if (v1.i64 == v2.i64) return 0;
+            if (v1.i64 < v2.i64) return -1;
+            return 1;
+    }
+    return 0;
 }
 
 static void
@@ -182,7 +206,9 @@ cli_param_parse_input_value(const char* input, struct cli_param* param, struct c
     CLI_ASSERT(param);
 
     if (!input || *input == '\0') {
-        CLI_WRITE_ERRORF(error, "invalid input value (empty) for param `%s`", param->name);
+        CLI_WRITE_ERRORF(
+            error, CLI_CODE_FAILURE, "invalid input value (empty) for param `%s`", param->name
+        );
     }
 
     switch (param->type) {
@@ -198,6 +224,7 @@ cli_param_parse_input_value(const char* input, struct cli_param* param, struct c
             if (*endptr != '\0') {
                 CLI_WRITE_ERRORF(
                     error,
+                    CLI_CODE_FAILURE,
                     "expecting %s type for param `%s` but got value `%s`",
                     cli_type_to_cstr(param->type),
                     param->name,
@@ -213,6 +240,7 @@ cli_param_parse_input_value(const char* input, struct cli_param* param, struct c
             if (*endptr != '\0') {
                 CLI_WRITE_ERRORF(
                     error,
+                    CLI_CODE_FAILURE,
                     "expecting %s type for param `%s` but got value `%s`",
                     cli_type_to_cstr(param->type),
                     param->name,
@@ -245,38 +273,14 @@ cli_param_parse_input_value(const char* input, struct cli_param* param, struct c
                     &printer, "value (%s) given for param `%s` not in choices ", input, param->name
                 );
                 print_param_choices(&printer, param);
-                CLI_WRITE_ERROR(error, error_buffer);
+                CLI_WRITE_ERROR(error, CLI_CODE_FAILURE, error_buffer);
             }
             break;
         }
         case CLI_VALIDATION_RANGE: {
-            bool valid = false;
-
-            switch (param->type) {
-                case CLI_STR: {
-                    int lcmp = strcmp(param->value.str, param->validation.range.start.str);
-                    int rcmp = strcmp(param->value.str, param->validation.range.stop.str);
-                    if (lcmp >= 0 && rcmp < 0) {
-                        valid = true;
-                    }
-                    break;
-                }
-                case CLI_INT:
-                    if (param->value.i64 >= param->validation.range.start.i64 &&
-                        param->value.i64 < param->validation.range.stop.i64) {
-                        valid = true;
-                    }
-                    break;
-                case CLI_FLOAT:
-                    if (param->value.f64 >= param->validation.range.start.f64 &&
-                        param->value.f64 < param->validation.range.stop.f64) {
-                        valid = true;
-                    }
-                    break;
-                case CLI_FLAG:
-                    CLI_ASSERT(0 && "unreachable");
-                    break;
-            }
+            int  lcmp = cli_value_compare(param->value, param->validation.range.start, param->type);
+            int  rcmp = cli_value_compare(param->value, param->validation.range.stop, param->type);
+            bool valid = (lcmp >= 0 && rcmp <= 0);
             if (!valid) {
                 char                error_buffer[sizeof error->reason];
                 struct info_printer printer = {
@@ -287,7 +291,7 @@ cli_param_parse_input_value(const char* input, struct cli_param* param, struct c
                     &printer, "value (%s) given for param `%s` not in range ", input, param->name
                 );
                 print_param_range(&printer, param);
-                CLI_WRITE_ERROR(error, error_buffer);
+                CLI_WRITE_ERROR(error, CLI_CODE_FAILURE, error_buffer);
             }
 
             break;
@@ -314,7 +318,10 @@ cli_parse_args(
 
     if (argc > ARGC_MAX) {
         CLI_WRITE_ERRORF(
-            error, "max argc of %i exceeded -- `#define ARGC_MAX (n)` to raise capacity", ARGC_MAX
+            error,
+            CLI_CODE_FAILURE,
+            "max argc of %i exceeded -- `#define ARGC_MAX (n)` to raise capacity",
+            ARGC_MAX
         );
         return;
     }
@@ -354,7 +361,10 @@ cli_parse_args(
                 else {
                     if (++arg >= argc) {
                         CLI_WRITE_ERRORF(
-                            error, "option %s has no value specified", params[param]->name
+                            error,
+                            CLI_CODE_FAILURE,
+                            "option %s has no value specified",
+                            params[param]->name
                         );
                         return;
                     }
@@ -369,7 +379,9 @@ cli_parse_args(
             }
         }
         if (!param_successfully_parsed && params[param]->flags & CLI_FLAG_OPTION_REQUIRED) {
-            CLI_WRITE_ERRORF(error, "required option %s is missing", params[param]->name);
+            CLI_WRITE_ERRORF(
+                error, CLI_CODE_FAILURE, "required option %s is missing", params[param]->name
+            );
             return;
         }
     }
@@ -394,9 +406,31 @@ cli_parse_args(
             break;
         }
         if (!param_successfully_parsed) {
-            CLI_WRITE_ERRORF(error, "missing positional argument %s", params[param]->name);
+            CLI_WRITE_ERRORF(
+                error, CLI_CODE_FAILURE, "missing positional argument %s", params[param]->name
+            );
             return;
         }
     }
-    // TODO: warn on unrecognized args
+
+    // warn on unrecognized args
+    //
+    bool                unused = false;
+    char                unused_buffer[sizeof error->reason];
+    struct info_printer printer = {
+        .buffer    = unused_buffer,
+        .remaining = sizeof unused_buffer,
+    };
+    for (size_t i = 1; i < (size_t)argc; i++) {
+        if (!already_parsed[i]) {
+            if (unused) {
+                INFO_PRINT(&printer, ", ");
+            }
+            unused = true;
+            INFO_PRINT(&printer, argv[i]);
+        }
+    }
+    if (unused) {
+        CLI_WRITE_ERRORF(error, CLI_CODE_WARNING, "unused arguments: [%s]", unused_buffer);
+    }
 }

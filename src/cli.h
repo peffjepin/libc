@@ -33,8 +33,9 @@ struct cli_validation {
 
     union {
         struct {
-            union cli_value start;  // inclusive
-            union cli_value stop;   // exclusive
+            // both inclusive
+            union cli_value start;
+            union cli_value stop;
         } range;
 
         struct {
@@ -50,20 +51,22 @@ enum cli_flags {
 
 struct cli_param {
     const char*           name;
+    const char*           description;
     enum cli_type         type;
     uint32_t              flags;
     struct cli_validation validation;
-    const char*           description;
     union cli_value       value;
 };
 
-struct cli_error {
-    enum {
-        CLI_CODE_SUCCESS = 0,
-        CLI_CODE_FAILURE,
-    } code;
+enum cli_code {
+    CLI_CODE_SUCCESS = 0,
+    CLI_CODE_WARNING,
+    CLI_CODE_FAILURE,
+};
 
-    char reason[1024];
+struct cli_error {
+    enum cli_code code;
+    char          reason[1024];
 };
 
 void cli_parse_args(
@@ -213,7 +216,7 @@ main(void)
 
             assert_error_contains(&error, param5.name);
             assert_error_contains(&error, param5.description);
-            assert_error_contains(&error, "[0, 10)");
+            assert_error_contains(&error, "[0-10]");
         }
     }
 
@@ -705,7 +708,7 @@ main(void)
                 },
         };
 
-        const char* out_of_range_values[] = {"-1", "10", "100"};
+        const char* out_of_range_values[] = {"-1", "11", "100"};
         for (size_t i = 0; i < sizeof out_of_range_values / sizeof *out_of_range_values; i++) {
             struct cli_error error = {0};
             cli_parse_args(
@@ -717,12 +720,12 @@ main(void)
                 &error
             );
             assert_error_contains(&error, out_of_range_values[i]);
-            assert_error_contains(&error, "[0, 10)");
+            assert_error_contains(&error, "[0-10]");
         }
 
         struct expected_value in_range_values[] = {
             {.input = "0", .value.i64 = 0},
-            {.input = "9", .value.i64 = 9},
+            {.input = "10", .value.i64 = 10},
             {.input = "5", .value.i64 = 5},
         };
         for (size_t i = 0; i < sizeof in_range_values / sizeof *in_range_values; i++) {
@@ -736,6 +739,28 @@ main(void)
             );
             TEST_ASSERT(param.value.i64 == in_range_values[i].value.i64);
         }
+    }
+
+    // unused args
+    {
+        struct cli_param param = {
+            .name = "param1",
+        };
+
+        struct cli_error error = {0};
+        cli_parse_args(
+            program_description,
+            1,
+            (struct cli_param*[]){&param},
+            4,
+            (const char*[]){program_name, "abc", "def", "zzz"},
+            &error
+        );
+        TEST_ASSERT(error.code == CLI_CODE_WARNING);
+
+        assert_error_contains(&error, "unused");
+        assert_error_contains(&error, "def");
+        assert_error_contains(&error, "zzz");
     }
 
     printf("%s tests passed\n", __FILE__);
